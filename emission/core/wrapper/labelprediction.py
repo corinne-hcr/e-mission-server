@@ -16,6 +16,8 @@ class AlgorithmTypes(enum.Enum):
     PLACEHOLDER_1 = 2
     PLACEHOLDER_2 = 3
     PLACEHOLDER_3 = 3
+    TWO_STAGE_BIN_CLUSTER = 4
+    PLACEHOLDER_PREDICTOR_DEMO = 5
 
 
 class Labelprediction(ecwb.WrapperBase):

@@ -10,6 +10,8 @@ import emission.storage.decorations.analysis_timeseries_queries as esda
 import emission.core.wrapper.labelprediction as ecwl
 import emission.core.wrapper.entry as ecwe
 
+import emission.analysis.modelling.tour_model.load_predict as lp
+
 # Does all the work necessary for a given user
 def infer_labels(user_id):
     time_query = epq.get_time_range_for_label_inference(user_id)
@@ -124,12 +126,32 @@ def placeholder_predictor_3(trip):
         ]
     ][index]
 
+# Placeholder that is suitable for a demo.
+# Finds all unique label combinations for this user and picks one randomly
+def placeholder_predictor_demo(trip):
+    import random
+
+    import emission.core.get_database as edb
+    user = trip["user_id"]
+    unique_user_inputs = edb.get_analysis_timeseries_db().find({"user_id": user}).distinct("data.user_input")
+    random_user_input = random.choice(unique_user_inputs) if random.randrange(0,10) > 0 else []
+
+    logging.debug(f"In placeholder_predictor_demo: ound {len(unique_user_inputs)} for user {user}, returning value {random_user_input}")
+    return [{"labels": random_user_input, "p": random.random()}]
+
+# Non-placeholder implementation. First bins the trips, and then clusters every bin
+# See emission.analysis.modelling.tour_model for more details
+# Assumes that pre-built models are stored in working directory
+# Models are built using evaluation_pipeline.py and build_save_model.py
+def predict_two_stage_bin_cluster(trip):
+    return lp.predict_labels(trip)
 
 # For each algorithm in ecwl.AlgorithmTypes that runs on a trip (e.g., not the ensemble, which
 # runs on the results of other algorithms), primary_algorithms specifies a corresponding
 # function to run. This makes it easy to plug in additional algorithms later.
 primary_algorithms = {
-    ecwl.AlgorithmTypes.PLACEHOLDER_2: placeholder_predictor_2
+    ecwl.AlgorithmTypes.TWO_STAGE_BIN_CLUSTER: predict_two_stage_bin_cluster,
+    ecwl.AlgorithmTypes.PLACEHOLDER_PREDICTOR_DEMO: placeholder_predictor_demo
 }
 
 # Code structure based on emission.analysis.classification.inference.mode.pipeline
@@ -188,13 +210,24 @@ class LabelInferencePipeline:
     def compute_and_save_ensemble(self, trip, predictions):
         il = ecwl.Labelprediction()
         il.trip_id = trip.get_id()
+        # if we get a real prediction, use it, otherwise fallback to the placeholder
         # Since this is not a real ensemble yet, we will not mark it as such
         # il.algorithm_id = ecwl.AlgorithmTypes.ENSEMBLE
-        il.algorithm_id = ecwl.AlgorithmTypes(predictions[0]["algorithm_id"])
+        if predictions[0]["prediction"] != []:
+            sel_prediction = predictions[0]
+            logging.debug(f"Found real prediction {sel_prediction}, using that preferentially")
+            assert sel_prediction.algorithm_id == ecwl.AlgorithmTypes.TWO_STAGE_BIN_CLUSTER
+        else:
+            sel_prediction = predictions[1]
+            logging.debug(f"No real prediction found, using placeholder prediction {sel_prediction}")
+            # Use a not equal assert since we may want to change the placeholder
+            assert sel_prediction.algorithm_id != ecwl.AlgorithmTypes.TWO_STAGE_BIN_CLUSTER
+
+        il.algorithm_id = ecwl.AlgorithmTypes(sel_prediction["algorithm_id"])
         il.start_ts = trip["data"]["start_ts"]
         il.end_ts = trip["data"]["end_ts"]
 
-        il.prediction = copy.copy(predictions[0]["prediction"])
+        il.prediction = copy.copy(sel_prediction["prediction"])
         
         self.ts.insert_data(self.user_id, "analysis/inferred_labels", il)
         return il
